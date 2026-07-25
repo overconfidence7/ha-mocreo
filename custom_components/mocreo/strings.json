@@ -1,0 +1,33 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MOCREO hub",
+        "description": "Home Assistant will listen for the data your MOCREO hub publishes to your MQTT broker. Make sure the hub's web portal is set to Hybrid Mode and pointed at this broker first.",
+        "data": {
+          "prefix": "MQTT topic prefix",
+          "temp_hundredths": "Hub sends temperature in hundredths of a degree"
+        },
+        "data_description": {
+          "prefix": "Leave this as 'mocreo' unless you changed it on the hub.",
+          "temp_hundredths": "Leave this on. Turn it off only if temperatures read 100x too small."
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "MOCREO is already set up. Add more hubs by leaving the topic prefix the same - they are discovered automatically.",
+      "mqtt_required": "The MQTT integration is not set up yet. Add the MQTT integration (and an MQTT broker such as the Mosquitto add-on) first."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "MOCREO options",
+        "data": {
+          "prefix": "MQTT topic prefix",
+          "temp_hundredths": "Hub sends temperature in hundredths of a degree"
+        }
+      }
+    }
+  }
+}
