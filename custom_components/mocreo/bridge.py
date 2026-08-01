@@ -235,7 +235,7 @@ class MocreoBridge:
         from the dashboard after a restart until the next transmission.
         """
         stored = self.entry.data.get(CONF_DISCOVERED) or {}
-        from .parser import KNOWN_FIELDS  # noqa: PLC0415
+        from .parser import KNOWN_FIELDS, derived_specs  # noqa: PLC0415
 
         for node_key, info in stored.items():
             if ":" not in node_key:
@@ -258,10 +258,15 @@ class MocreoBridge:
                         diagnostic=saved.get("diagnostic", False),
                         truthy=tuple(saved.get("truthy") or ()),
                     )
-                unique = f"{node_key}:{field_key}"
-                self._known.add(unique)
-                self.specs[unique] = spec
-                self._pending.setdefault(spec.kind, []).append((node_key, spec))
+                for candidate in (spec, *derived_specs(field_key)):
+                    unique = f"{node_key}:{candidate.key}"
+                    if unique in self._known:
+                        continue
+                    self._known.add(unique)
+                    self.specs[unique] = candidate
+                    self._pending.setdefault(candidate.kind, []).append(
+                        (node_key, candidate)
+                    )
 
     @callback
     def _schedule_save(self) -> None:

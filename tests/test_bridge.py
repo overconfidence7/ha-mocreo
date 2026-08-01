@@ -284,12 +284,22 @@ async def main():
 
     print("\nsecond node on the same hub")
     bridge._handle_message(
-        Msg(f"mocreo/{HUB}/node/{LW1}/data", json.dumps([{"model": "LW1", "water": 1, "level": "High"}]))
+        Msg(
+            f"mocreo/{HUB}/node/{LW1}/data",
+            json.dumps([{"measureId": 3574, "water_level": 1, "model": "LW1", "timestamp": 1785609298}]),
+        )
     )
     check("two nodes", len(bridge.nodes), 2)
-    check("leak binary added", any(s.key == "water" for _, s in added[KIND_BINARY]), True)
-    check("severity sensor added", any(s.key == "level" for _, s in added[KIND_SENSOR]), True)
+    check("leak binary added", any(s.key == "water_leak" for _, s in added[KIND_BINARY]), True)
+    check("raw level sensor added", any(s.key == "water_level" for _, s in added[KIND_SENSOR]), True)
+    check("leak value is wet", bridge.nodes[f"{HUB}:{LW1}"].values["water_leak"], True)
     check("hub device still single", len(_REGISTRY.devices), 1)
+
+    bridge._handle_message(
+        Msg(f"mocreo/{HUB}/node/{LW1}/data", json.dumps([{"model": "LW1", "water_level": 0, "temperature": 1800}]))
+    )
+    check("leak clears", bridge.nodes[f"{HUB}:{LW1}"].values["water_leak"], False)
+    check("lw1 onboard temp", bridge.nodes[f"{HUB}:{LW1}"].values["temperature"], 18.0)
 
     print("\nunrelated / malformed traffic is ignored")
     n_nodes = len(bridge.nodes)
@@ -319,19 +329,17 @@ async def main():
     check(
         "sensors restored",
         sorted({s.key for _, s in added2[KIND_SENSOR]}),
-        ["battery", "level", "signal", "temperature"],
+        ["battery", "signal", "temperature", "water_level"],
     )
     check(
         "binaries restored",
         sorted({s.key for _, s in added2[KIND_BINARY]}),
-        ["found", "probe", "rule_alarm", "water"],
+        ["found", "probe", "rule_alarm", "water_leak"],
     )
     check("restored temp keeps device class",
           next(s for _, s in added2[KIND_SENSOR] if s.key == "temperature").device_class, "temperature")
     check("restored leak keeps device class",
-          next(s for _, s in added2[KIND_BINARY] if s.key == "water").device_class, "moisture")
-    check("restored unknown keeps kind",
-          next(s for _, s in added2[KIND_SENSOR] if s.key == "level").kind, KIND_SENSOR)
+          next(s for _, s in added2[KIND_BINARY] if s.key == "water_leak").device_class, "moisture")
 
     await bridge2.async_start()
     check("re-asks config for restored nodes",
@@ -357,6 +365,35 @@ async def main():
     print("\nteardown")
     await bridge2.async_stop()
     check("unsubscribed", SUBSCRIBED, [])
+
+    print("\nupgrade path: a v1.0.1 cache with only water_level gains the leak entity")
+    legacy = ConfigEntry(data={"discovered": {
+        f"{HUB}:{LW1}": {
+            "model": "LW1",
+            "units": {},
+            "fields": {
+                "water_level": {"kind": KIND_SENSOR, "name": "Water level",
+                                "device_class": None, "unit": None,
+                                "state_class": None, "diagnostic": False, "truthy": []},
+            },
+        }
+    }})
+    _, _, b_up, added_up = make_bridge(legacy)
+    b_up.async_prepare()
+    wire(b_up, added_up)
+    check("leak entity seeded on restore",
+          [s.key for _, s in added_up[KIND_BINARY]], ["water_leak"])
+    check("seeded leak has moisture class",
+          added_up[KIND_BINARY][0][1].device_class, "moisture")
+    check("raw level still restored",
+          [s.key for _, s in added_up[KIND_SENSOR]], ["water_level"])
+    b_up._handle_message(
+        Msg(f"mocreo/{HUB}/node/{LW1}/data", json.dumps([{"model": "LW1", "water_level": 1}]))
+    )
+    check("no duplicate leak entity after message",
+          len(added_up[KIND_BINARY]), 1)
+    check("seeded entity receives the value",
+          b_up.nodes[f"{HUB}:{LW1}"].values["water_leak"], True)
 
     print("\ncustom prefix is honoured")
     hass3 = HomeAssistant()

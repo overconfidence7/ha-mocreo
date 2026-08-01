@@ -154,6 +154,138 @@ def t_lw1_variants():
     check("water 0 -> off", readings_by_key(dry), {"water": False})
 
 
+def t_lw1_real_payloads():
+    """Verbatim payloads captured from a real LW1 on an H5 Pro hub."""
+    print("\nLW1 real captured payloads (water_level 1 = wet, 0 = dry)")
+    topic = P.parse_topic("mocreo", f"mocreo/{HUB}/node/{NODE}/data")
+
+    wet, _ = P.extract_readings(
+        topic,
+        json.dumps([{"measureId": 3574, "water_level": 1, "model": "LW1", "timestamp": 1785609298}]),
+    )
+    vals = readings_by_key(wet)
+    check("derived leak binary is on", vals.get("water_leak"), True)
+    check("raw level kept", vals.get("water_level"), 1)
+    leak = next(r.spec for r in wet if r.spec.key == "water_leak")
+    check("leak is a binary_sensor", leak.kind, P.KIND_BINARY)
+    check("leak device class", leak.device_class, "moisture")
+    check("leak is not diagnostic", leak.diagnostic, False)
+    check("raw level is diagnostic",
+          next(r.spec.diagnostic for r in wet if r.spec.key == "water_level"), True)
+    check("wet payload has no temperature", "temperature" in vals, False)
+
+    dry, _ = P.extract_readings(
+        topic,
+        json.dumps([{"measureId": 3576, "timestamp": 1785609301, "water_level": 0,
+                     "model": "LW1", "temperature": 1800}]),
+    )
+    vals = readings_by_key(dry)
+    check("derived leak binary is off", vals.get("water_leak"), False)
+    check("raw level 0", vals.get("water_level"), 0)
+    check("onboard temperature scaled", vals.get("temperature"), 18.0)
+
+    print("  severity values above 1 must still read as wet")
+    for level in (2, 3, "High", "low"):
+        r, _ = P.extract_readings(topic, json.dumps([{"model": "LW1", "water_level": level}]))
+        check(f"water_level {level!r} -> wet", readings_by_key(r).get("water_leak"), True)
+    for level in (0, "dry", "none"):
+        r, _ = P.extract_readings(topic, json.dumps([{"model": "LW1", "water_level": level}]))
+        check(f"water_level {level!r} -> dry", readings_by_key(r).get("water_leak"), False)
+
+    print("  non-leak keys must not sprout a leak entity")
+    r, _ = P.extract_readings(topic, json.dumps([{"model": "LS2", "temperature": 500, "battery": 90}]))
+    check("no spurious water_leak", "water_leak" in readings_by_key(r), False)
+
+
+def t_captured_session():
+    """The full MQTT capture from a real H5 Pro: LW1 wet/dry cycles + an LS2 freezer report."""
+    print("\nFull captured session (verbatim from hardware)")
+    LW = "0030AE1117515500"
+    LS = "0030AEA4059AB600"
+    HUBSN = "MCFC012CD696D4"
+
+    def feed(node, action, payload):
+        t = P.parse_topic("mocreo", f"mocreo/{HUBSN}/node/{node}/{action}")
+        return P.extract_readings(t, json.dumps(payload))
+
+    # Message 9 / 10: severity escalates to 2 while wet
+    r, _ = feed(LW, "data", [{"measureId": -1, "water_level": 2, "model": "LW1", "timestamp": 1785609538}])
+    v = readings_by_key(r)
+    check("data water_level 2 -> wet", v.get("water_leak"), True)
+    check("severity 2 preserved", v.get("water_level"), 2)
+    check("measureId -1 ignored", "measureid" in v, False)
+
+    r, _ = feed(LW, "event", {"event": "trigger", "water_level": 2, "timestamp": 1785609539})
+    v = readings_by_key(r)
+    check("event trigger -> wet", v.get("water_leak"), True)
+    check("no duplicate rule_alarm on a leak event", "rule_alarm" in v, False)
+
+    # Message 11 / 12: recovery
+    r, _ = feed(LW, "data", [{"measureId": -1, "timestamp": 1785609552, "water_level": 0,
+                              "model": "LW1", "temperature": 1800}])
+    v = readings_by_key(r)
+    check("recovery data -> dry", v.get("water_leak"), False)
+    check("recovery carries temperature", v.get("temperature"), 18.0)
+
+    r, meta = feed(LW, "event", {"event": "recover", "water_level": 0, "timestamp": 1785609553})
+    v = readings_by_key(r)
+    check("event recover -> dry", v.get("water_leak"), False)
+    check("meta records the event", meta.get("event"), "recover")
+
+    # Message 6: the LS2 freezer probe
+    r, meta = feed(LS, "data", [{"measureId": 21111, "temperature": -2420,
+                                 "model": "LS2", "timestamp": 1785609496}])
+    v = readings_by_key(r)
+    check("freezer temperature", v.get("temperature"), -24.2)
+    check("LS2 model", meta.get("model"), "LS2")
+    check("LS2 grows no leak entity", "water_leak" in v, False)
+
+    # A threshold rule on a non-leak sensor must still produce the generic alarm.
+    r, _ = feed(LS, "event", {"event": "trigger", "temperature": -800, "timestamp": 1785609600})
+    v = readings_by_key(r)
+    check("temperature rule -> rule_alarm", v.get("rule_alarm"), True)
+    check("integer event temp is scaled", v.get("temperature"), -8.0)
+    r, _ = feed(LS, "event", {"event": "trigger", "temperature": -8.0, "timestamp": 1785609600})
+    check("float event temp untouched", readings_by_key(r).get("temperature"), -8.0)
+
+
+def t_water_level_labels():
+    print("\nWater level labels (0 dry, 1 base contacts, 2-4 rising up the side)")
+    check("0", P.water_level_label(0), "Dry")
+    check("1", P.water_level_label(1), "Surface")
+    check("2", P.water_level_label(2), "Shallow")
+    check("3", P.water_level_label(3), "Rising")
+    check("4", P.water_level_label(4), "Deep")
+    check("scale max", P.WATER_LEVEL_MAX, 4)
+
+    print("  values off the assumed scale must not be mislabelled")
+    check("5 falls back", P.water_level_label(5), "Level 5")
+    check("9 falls back", P.water_level_label(9), "Level 9")
+    check("negative falls back", P.water_level_label(-1), "Level -1")
+
+    print("  odd types survive")
+    check("float 2.0", P.water_level_label(2.0), "Shallow")
+    check("float 2.5", P.water_level_label(2.5), "Level 2.5")
+    check("string '3'", P.water_level_label("3"), "Rising")
+    check("word passthrough", P.water_level_label("high"), "High")
+    check("None", P.water_level_label(None), None)
+    check("bool rejected", P.water_level_label(True), None)
+    check("empty string", P.water_level_label(""), None)
+
+    print("  every level still reads as wet except 0")
+    topic = P.parse_topic("mocreo", f"mocreo/{HUB}/node/{NODE}/data")
+    for level in (1, 2, 3, 4, 5):
+        r, _ = P.extract_readings(topic, json.dumps([{"model": "LW1", "water_level": level}]))
+        check(f"level {level} wet", readings_by_key(r).get("water_leak"), True)
+    r, _ = P.extract_readings(topic, json.dumps([{"model": "LW1", "water_level": 0}]))
+    check("level 0 dry", readings_by_key(r).get("water_leak"), False)
+
+    print("  level sensor graphs in history")
+    spec = next(r.spec for r in r if r.spec.key == "water_level")
+    check("state class", spec.state_class, "measurement")
+    check("still diagnostic", spec.diagnostic, True)
+
+
 def t_lw1_severity():
     print("\nLW1 leak severity")
     topic = P.parse_topic("mocreo", f"mocreo/{HUB}/node/{NODE}/data")
@@ -233,6 +365,9 @@ for fn in (
     t_state,
     t_config,
     t_lw1_variants,
+    t_lw1_real_payloads,
+    t_captured_session,
+    t_water_level_labels,
     t_lw1_severity,
     t_unknown_fields,
     t_unit_conflicts,

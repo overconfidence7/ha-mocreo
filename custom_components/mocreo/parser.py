@@ -182,13 +182,32 @@ KNOWN_FIELDS: dict[str, FieldSpec] = {
         device_class="moisture",
         truthy=(True, 1, "1", "true", "wet", "water", "leak", "alarm"),
     ),
-    # LW1 advertises "leak severity tracking" (Low / Medium / High).
+    # LW1 sends `water_level` on the data topic: 0 = dry, 1 = wet.  MOCREO also
+    # advertises "leak severity tracking" (Low / Medium / High), so higher
+    # values are possible and the raw number is kept as a diagnostic sensor --
+    # but the entity you automate against is the derived binary one below.
     "level": _spec("level", name="Leak level", icon="mdi:water-percent"),
-    "waterlevel": _spec("waterlevel", name="Water level", icon="mdi:water-percent"),
-    "water_level": _spec("water_level", name="Water level", icon="mdi:water-percent"),
+    "waterlevel": _spec(
+        "waterlevel",
+        name="Water level",
+        icon="mdi:water-percent",
+        state_class="measurement",
+        diagnostic=True,
+    ),
+    "water_level": _spec(
+        "water_level",
+        name="Water level",
+        icon="mdi:water-percent",
+        state_class="measurement",
+        diagnostic=True,
+    ),
     "severity": _spec("severity", name="Leak severity", icon="mdi:water-alert"),
-    "leaklevel": _spec("leaklevel", name="Leak level", icon="mdi:water-percent"),
-    "leak_level": _spec("leak_level", name="Leak level", icon="mdi:water-percent"),
+    "leaklevel": _spec(
+        "leaklevel", name="Leak level", icon="mdi:water-percent", diagnostic=True
+    ),
+    "leak_level": _spec(
+        "leak_level", name="Leak level", icon="mdi:water-percent", diagnostic=True
+    ),
     # --- misc -------------------------------------------------------------
     "alarm": _spec(
         "alarm",
@@ -205,6 +224,47 @@ KNOWN_FIELDS: dict[str, FieldSpec] = {
         diagnostic=True,
     ),
 }
+
+# Truthy words/values for a leak reading, whether the hub sends a number, a
+# severity word, or a plain flag.
+_LEAK_TRUTHY: tuple[Any, ...] = (
+    True,
+    1,
+    "1",
+    "true",
+    "wet",
+    "water",
+    "leak",
+    "alarm",
+    "low",
+    "medium",
+    "mid",
+    "high",
+    "critical",
+)
+
+# Some payload keys should produce a *second*, more useful entity alongside the
+# literal one.  The LW1's `water_level` is the case that matters: the raw number
+# is worth keeping, but what you actually automate against is a wet/dry binary
+# sensor with the moisture device class.
+DERIVED_FIELDS: dict[str, tuple[FieldSpec, ...]] = {
+    key: (
+        FieldSpec(
+            key="water_leak",
+            kind=KIND_BINARY,
+            name="Water leak",
+            device_class="moisture",
+            truthy=_LEAK_TRUTHY,
+        ),
+    )
+    for key in ("water_level", "waterlevel", "leaklevel", "leak_level", "severity")
+}
+
+
+def derived_specs(key: str) -> tuple[FieldSpec, ...]:
+    """Extra entities to create alongside the literal reading for ``key``."""
+    return DERIVED_FIELDS.get(_normalise_key(key), ())
+
 
 # Keys that carry bookkeeping rather than state and must never become entities.
 IGNORED_KEYS = frozenset(
@@ -255,6 +315,45 @@ DEVICE_CLASS_UNITS: dict[str, frozenset[str]] = {
     "voltage": frozenset({"V", "mV", "µV", "kV", "MV"}),
     "signal_strength": frozenset({"dB", "dBm"}),
 }
+
+# The LW1 reports `water_level` as a depth step, not a bitmask: 0 dry, 1 the
+# base contacts, and 2-4 rising water up the two side probes.  Values 0, 1, 2
+# and 4 have been observed on real hardware; 3 is inferred from the sequence.
+# Anything outside this range is deliberately NOT guessed at -- it renders as
+# "Level N" so an unexpected reading is visible rather than mislabelled.
+WATER_LEVEL_LABELS: dict[int, str] = {
+    0: "Dry",
+    1: "Surface",
+    2: "Shallow",
+    3: "Rising",
+    4: "Deep",
+}
+WATER_LEVEL_MAX = 4
+
+# Payload keys that carry that depth step.
+LEVEL_KEYS: tuple[str, ...] = ("water_level", "waterlevel", "leaklevel", "leak_level")
+
+
+def water_level_label(value: Any) -> str | None:
+    """Human-readable name for a raw water level, or ``None`` if not a level."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            value = int(float(stripped))
+        except ValueError:
+            return stripped.title()
+    if isinstance(value, float):
+        if value != int(value):
+            return f"Level {value}"
+        value = int(value)
+    if not isinstance(value, int):
+        return None
+    return WATER_LEVEL_LABELS.get(value) or f"Level {value}"
+
 
 # Word forms the hub may use for a leak severity, lowest to highest.
 SEVERITY_ORDER = ("none", "dry", "low", "medium", "mid", "high", "critical")
@@ -426,9 +525,11 @@ def coerce_value(spec: FieldSpec, value: Any, source: str, temp_hundredths: bool
     if isinstance(value, bool):
         return int(value)
 
-    if spec.data_scale != 1.0 and source == "data" and isinstance(value, int):
-        # MOCREO sends hundredths of a degree as an integer on the data topic,
-        # and already-scaled floats on the event topic.  Users can turn the
+    if spec.data_scale != 1.0 and isinstance(value, int):
+        # MOCREO sends hundredths of a degree as an *integer* and already-scaled
+        # values as floats.  Keying off the type rather than the topic matters:
+        # real hubs send raw integers on the event topic too, even though the
+        # documentation's example shows a float there.  Users can turn the
         # divide-by-100 off if a future firmware changes this.
         if spec.device_class in ("temperature", "humidity") and not temp_hundredths:
             return value
@@ -468,32 +569,7 @@ def extract_readings(
             # Config responses carry metadata only; no state to publish.
             continue
 
-        if topic.action == "event":
-            evt = obj.get("event")
-            if isinstance(evt, str):
-                meta["event"] = evt
-                readings.append(
-                    Reading(
-                        hub_sn=topic.hub_sn,
-                        node_id=topic.node_id,
-                        spec=FieldSpec(
-                            key="rule_alarm",
-                            kind=KIND_BINARY,
-                            name="Rule alarm",
-                            device_class="problem",
-                            truthy=("trigger",),
-                        ),
-                        value=evt.strip().lower() == "trigger",
-                        source=topic.action,
-                        raw_key="event",
-                        extra={
-                            k: v
-                            for k, v in obj.items()
-                            if k not in ("event",) and not isinstance(v, (dict, list))
-                        },
-                    )
-                )
-
+        field_readings: list[Reading] = []
         for key, value in obj.items():
             spec = spec_for(key, value, units)
             if spec is None:
@@ -501,7 +577,7 @@ def extract_readings(
             coerced = coerce_value(spec, value, topic.action, temp_hundredths)
             if coerced is None:
                 continue
-            readings.append(
+            field_readings.append(
                 Reading(
                     hub_sn=topic.hub_sn,
                     node_id=topic.node_id,
@@ -511,6 +587,57 @@ def extract_readings(
                     raw_key=key,
                 )
             )
+
+            for extra in derived_specs(key):
+                extra_value = coerce_value(extra, value, topic.action, temp_hundredths)
+                if extra_value is None:
+                    continue
+                field_readings.append(
+                    Reading(
+                        hub_sn=topic.hub_sn,
+                        node_id=topic.node_id,
+                        spec=extra,
+                        value=extra_value,
+                        source=topic.action,
+                        raw_key=key,
+                    )
+                )
+
+        if topic.action == "event":
+            evt = obj.get("event")
+            if isinstance(evt, str):
+                meta["event"] = evt
+                # A leak sensor's hub-side rule *is* the leak, and the event
+                # payload already carries `water_level` -- so a second "Rule
+                # alarm" entity would just duplicate the moisture one.  Only
+                # publish the generic alarm when nothing else represents it,
+                # which is the case for threshold rules on other sensors.
+                if not any(
+                    r.spec.device_class == "moisture" for r in field_readings
+                ):
+                    field_readings.append(
+                        Reading(
+                            hub_sn=topic.hub_sn,
+                            node_id=topic.node_id,
+                            spec=FieldSpec(
+                                key="rule_alarm",
+                                kind=KIND_BINARY,
+                                name="Rule alarm",
+                                device_class="problem",
+                                truthy=("trigger",),
+                            ),
+                            value=evt.strip().lower() == "trigger",
+                            source=topic.action,
+                            raw_key="event",
+                            extra={
+                                k: v
+                                for k, v in obj.items()
+                                if k != "event" and not isinstance(v, (dict, list))
+                            },
+                        )
+                    )
+
+        readings.extend(field_readings)
 
     return readings, meta
 

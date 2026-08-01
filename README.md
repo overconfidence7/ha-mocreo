@@ -18,13 +18,25 @@ readings arrive:
 |---|---|---|
 | Temperature | `sensor` | device class `temperature`, °C, long-term statistics |
 | Humidity / pressure | `sensor` | when the model reports them |
-| Water leak | `binary_sensor` | device class `moisture` |
-| Leak severity / level | `sensor` | plus a numeric `severity_rank` attribute for automations |
+| Water leak | `binary_sensor` | device class `moisture` — derived from the LW1's `water_level` field, on for any non-zero value |
+| Water level | `sensor` | diagnostic; the raw depth step, with `level_label` / `level_scale_max` attributes for readable alerts |
 | Rule trigger | `binary_sensor` | device class `problem`, follows the hub's own threshold rules |
 | Battery | `sensor` | diagnostic |
 | Signal strength | `sensor` | diagnostic, dBm |
 | Probe connected | `binary_sensor` | diagnostic, connectivity |
 | Node online | `binary_sensor` | diagnostic, connectivity |
+
+### Water level scale
+
+The LW1 reports `water_level` as a depth step rather than a plain flag. On real
+hardware `0`, `1`, `2` and `4` have been observed; the working model is `0` dry,
+`1` the base contacts, and `2`–`4` water rising up the two side probes. The
+**Water leak** binary sensor is on for *any* non-zero value, so the exact scale
+never affects whether an alert fires.
+
+Both leak entities carry `level`, `level_label` (Dry / Surface / Shallow /
+Rising / Deep) and `level_scale_max` attributes. A value outside the known range
+renders as `Level N` rather than being given a label it may not deserve.
 
 ### Unknown models and new fields
 

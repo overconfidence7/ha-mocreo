@@ -93,6 +93,11 @@ Each node becomes a device named like `MOCREO LS2 000100`. Rename these to
 something meaningful before writing automations, since entity IDs follow the
 device name.
 
+> Leak sensors expose a **Water leak** binary sensor (Wet / Dry) — that is the
+> one to automate against. They also report an onboard **temperature**, which is
+> genuinely useful for freeze warnings on pipes, and a diagnostic **Water level**
+> number that the binary sensor is derived from.
+
 ---
 
 ## Automation examples
@@ -115,13 +120,47 @@ actions:
     data:
       title: "💧 Water leak"
       message: >-
-        {{ trigger.to_state.attributes.friendly_name }} is wet
+        {{ trigger.to_state.attributes.friendly_name }} is wet —
+        {{ state_attr(trigger.entity_id, 'level_label') }}
         ({{ now().strftime('%-I:%M %p') }})
       data:
         priority: high
         ttl: 0
         channel: alarm_stream
 ```
+
+### Water rising — a different emergency
+
+Leak sensors report a depth step, not just wet/dry. A damp patch under a sink
+and water climbing the side of a basement sensor deserve different responses.
+
+```yaml
+alias: Water rising
+mode: parallel
+triggers:
+  - trigger: numeric_state
+    entity_id:
+      - sensor.leak_sensor_1_water_level
+      - sensor.leak_sensor_2_water_level
+    above: 1
+actions:
+  - action: notify.notify
+    data:
+      title: "🌊 Water RISING"
+      message: >-
+        {{ trigger.to_state.attributes.friendly_name }} —
+        {{ state_attr(trigger.entity_id, 'level_label') }}
+        (level {{ trigger.to_state.state }} of
+        {{ state_attr(trigger.entity_id, 'level_scale_max') }}).
+        This is more than a drip.
+      data:
+        priority: high
+        ttl: 0
+        channel: alarm_stream
+```
+
+The **Water level** entity is a diagnostic one, so it lives further down the
+device page — it still works in automations exactly like any other sensor.
 
 ### Freezer too warm — but only if it stays warm
 

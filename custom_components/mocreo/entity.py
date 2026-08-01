@@ -12,7 +12,12 @@ from homeassistant.helpers.entity import Entity
 
 from .bridge import MocreoBridge, MocreoNode
 from .const import DOMAIN, MANUFACTURER, SIGNAL_NODE_UPDATED
-from .parser import FieldSpec
+from .parser import (
+    LEVEL_KEYS,
+    WATER_LEVEL_MAX,
+    FieldSpec,
+    water_level_label,
+)
 
 # Fields that describe the radio link rather than the measurement; these stay
 # available even when the node is reported offline.
@@ -79,6 +84,19 @@ class MocreoEntity(Entity):
             attrs["model"] = node.model
         attrs["node_id"] = self._node_id
         attrs["hub_serial"] = self._hub_sn
+        # Surface the depth in words on both the level sensor and the leak
+        # binary sensor, so a notification template needs only one entity.
+        if self.spec.key in LEVEL_KEYS or self.spec.key == "water_leak":
+            for level_key in LEVEL_KEYS:
+                if level_key not in node.values:
+                    continue
+                label = water_level_label(node.values[level_key])
+                if label is not None:
+                    attrs["level"] = node.values[level_key]
+                    attrs["level_label"] = label
+                    attrs["level_scale_max"] = WATER_LEVEL_MAX
+                break
+
         extra = node.extra.get(self.spec.key)
         if extra:
             attrs.update(extra)
