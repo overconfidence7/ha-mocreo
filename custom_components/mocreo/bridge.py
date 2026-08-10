@@ -273,7 +273,10 @@ class MocreoBridge:
                 # stores only the subset of attributes that version knew about,
                 # so rebuilding a derived spec from it would drop newer
                 # behaviour -- notably `assume_off` on the leak sensor.
-                spec = KNOWN_FIELDS.get(field_key) or DERIVED_SPECS_BY_KEY.get(field_key)
+                # Derived specs win over the literal table: `water_leak` exists
+                # in both, and which one was registered first used to depend on
+                # the order the keys happened to sit in the cache.
+                spec = DERIVED_SPECS_BY_KEY.get(field_key) or KNOWN_FIELDS.get(field_key)
                 if spec is None:
                     spec = FieldSpec(
                         key=field_key,

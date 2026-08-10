@@ -151,6 +151,7 @@ KNOWN_FIELDS: dict[str, FieldSpec] = {
         name="Water leak",
         device_class="moisture",
         truthy=(True, 1, "1", "true", "wet", "water", "leak", "alarm"),
+        assume_off=True,
     ),
     "leak": _spec(
         "leak",
@@ -158,6 +159,7 @@ KNOWN_FIELDS: dict[str, FieldSpec] = {
         name="Water leak",
         device_class="moisture",
         truthy=(True, 1, "1", "true", "wet", "water", "leak", "alarm"),
+        assume_off=True,
     ),
     "wet": _spec(
         "wet",
@@ -165,6 +167,7 @@ KNOWN_FIELDS: dict[str, FieldSpec] = {
         name="Water leak",
         device_class="moisture",
         truthy=(True, 1, "1", "true", "wet", "water", "leak", "alarm"),
+        assume_off=True,
     ),
     "moisture": _spec(
         "moisture",
@@ -172,6 +175,7 @@ KNOWN_FIELDS: dict[str, FieldSpec] = {
         name="Water leak",
         device_class="moisture",
         truthy=(True, 1, "1", "true", "wet", "water", "leak", "alarm"),
+        assume_off=True,
     ),
     "waterleak": _spec(
         "waterleak",
@@ -179,6 +183,7 @@ KNOWN_FIELDS: dict[str, FieldSpec] = {
         name="Water leak",
         device_class="moisture",
         truthy=(True, 1, "1", "true", "wet", "water", "leak", "alarm"),
+        assume_off=True,
     ),
     "water_leak": _spec(
         "water_leak",
@@ -186,6 +191,7 @@ KNOWN_FIELDS: dict[str, FieldSpec] = {
         name="Water leak",
         device_class="moisture",
         truthy=(True, 1, "1", "true", "wet", "water", "leak", "alarm"),
+        assume_off=True,
     ),
     # LW1 sends `water_level` on the data topic: 0 = dry, 1 = wet.  MOCREO also
     # advertises "leak severity tracking" (Low / Medium / High), so higher
