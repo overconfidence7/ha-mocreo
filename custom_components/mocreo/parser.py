@@ -48,6 +48,11 @@ class FieldSpec:
     # For binary fields: values that mean "on".
     truthy: tuple[Any, ...] = ()
     enabled_default: bool = True
+    # For binary fields that are *derived* from another key: when the source key
+    # has never been seen, report "off" instead of going unavailable.  The LW1
+    # only sends `water_level` on an event, so a scheduled report alone would
+    # otherwise leave the leak sensor unavailable forever after a restart.
+    assume_off: bool = False
 
 
 def _spec(key: str, **kwargs: Any) -> FieldSpec:
@@ -243,6 +248,10 @@ _LEAK_TRUTHY: tuple[Any, ...] = (
     "critical",
 )
 
+# The raw keys that carry a leak depth.  Declared here because DERIVED_FIELDS
+# below needs them; LEVEL_KEYS aliases this for the public API.
+LEVEL_KEYS_DECL: tuple[str, ...] = ("water_level", "waterlevel", "leaklevel", "leak_level")
+
 # Some payload keys should produce a *second*, more useful entity alongside the
 # literal one.  The LW1's `water_level` is the case that matters: the raw number
 # is worth keeping, but what you actually automate against is a wet/dry binary
@@ -255,15 +264,40 @@ DERIVED_FIELDS: dict[str, tuple[FieldSpec, ...]] = {
             name="Water leak",
             device_class="moisture",
             truthy=_LEAK_TRUTHY,
+            assume_off=True,
         ),
     )
     for key in ("water_level", "waterlevel", "leaklevel", "leak_level", "severity")
 }
 
+# Reverse lookup, keyed by the *derived* entity's own key.  Restoring a derived
+# spec from the config-entry cache must go through this rather than rebuilding
+# it from the stored dict: caches written by older versions predate fields like
+# ``assume_off`` and would silently resurrect the old behaviour.
+DERIVED_SPECS_BY_KEY: dict[str, FieldSpec] = {
+    spec.key: spec for specs in DERIVED_FIELDS.values() for spec in specs
+}
+
+# Values worth carrying across a restart in the config entry.  These are the
+# keys that are reported only when they *change* (a leak event), so waiting for
+# the next transmission can mean waiting days.  Everything else is left to Home
+# Assistant's own state restore.
+PERSISTED_VALUE_KEYS: frozenset[str] = frozenset(
+    (*LEVEL_KEYS_DECL, "severity", *DERIVED_SPECS_BY_KEY)
+)
+
 
 def derived_specs(key: str) -> tuple[FieldSpec, ...]:
     """Extra entities to create alongside the literal reading for ``key``."""
     return DERIVED_FIELDS.get(_normalise_key(key), ())
+
+
+def derived_source_key(node_values: dict[str, Any], derived_key: str) -> str | None:
+    """Find which raw key in ``node_values`` feeds ``derived_key``."""
+    for source, specs in DERIVED_FIELDS.items():
+        if source in node_values and any(s.key == derived_key for s in specs):
+            return source
+    return None
 
 
 # Keys that carry bookkeeping rather than state and must never become entities.
@@ -331,7 +365,7 @@ WATER_LEVEL_LABELS: dict[int, str] = {
 WATER_LEVEL_MAX = 4
 
 # Payload keys that carry that depth step.
-LEVEL_KEYS: tuple[str, ...] = ("water_level", "waterlevel", "leaklevel", "leak_level")
+LEVEL_KEYS: tuple[str, ...] = LEVEL_KEYS_DECL
 
 
 def water_level_label(value: Any) -> str | None:

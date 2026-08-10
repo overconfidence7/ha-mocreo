@@ -6,6 +6,8 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
+from typing import Any
+
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -48,12 +50,36 @@ class MocreoBinarySensor(MocreoEntity, BinarySensorEntity, RestoreEntity):
     @property
     def is_on(self) -> bool | None:
         value = self.raw_value
-        if value is None:
+        if value is not None:
+            return bool(value)
+        if self._restored is not None:
             return self._restored
-        return bool(value)
+        # Nothing has ever been seen for this field.  For a derived leak sensor
+        # that means the node has only sent scheduled reports, which omit
+        # `water_level` entirely -- so "no leak has been reported" is the
+        # honest reading, and it is the one automations can use.  Reporting
+        # unknown here is what left these sensors unavailable indefinitely,
+        # and it was self-perpetuating: the restored state was itself
+        # unavailable, so the next restart started from the same place.
+        if self.spec.assume_off:
+            return False
+        return None
 
     @property
     def available(self) -> bool:
-        if self.raw_value is None and self._restored is not None:
-            return True
+        if self.raw_value is None:
+            if self._restored is not None:
+                return True
+            if self.spec.assume_off:
+                node = self.node
+                return node is not None and node.online
         return super().available
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        attrs = super().extra_state_attributes or {}
+        if self.spec.assume_off and self.raw_value is None and self._restored is None:
+            # Distinguishes "assumed dry" from "reported dry" without changing
+            # the state an automation triggers on.
+            attrs["assumed_state"] = True
+        return attrs

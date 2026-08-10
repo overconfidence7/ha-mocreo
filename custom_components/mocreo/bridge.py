@@ -21,6 +21,7 @@ from .const import (
 from .parser import (
     KIND_BINARY,
     KIND_SENSOR,
+    PERSISTED_VALUE_KEYS,
     FieldSpec,
     Reading,
     extract_readings,
@@ -43,6 +44,9 @@ class MocreoNode:
         self.values: dict[str, Any] = {}
         self.extra: dict[str, dict[str, Any]] = {}
         self.online: bool = True
+        # True until the node is heard from in this run: its values came out of
+        # the config-entry cache rather than off the air.
+        self.restored: bool = False
         self.last_seen: float | None = None
         self.last_payloads: dict[str, Any] = {}
 
@@ -175,6 +179,7 @@ class MocreoBridge:
 
         node.last_payloads[topic.action] = _safe_payload(msg.payload)
         node.last_seen = time.time()
+        node.restored = False
         model_changed = bool(meta.get("model")) and meta["model"] != node.model
         if meta.get("model"):
             node.model = meta["model"]
@@ -183,7 +188,13 @@ class MocreoBridge:
         self._ensure_devices(node, update_model=model_changed)
 
         new_items: dict[str, list[tuple[str, FieldSpec]]] = {}
+        sticky_changed = False
         for reading in readings:
+            if (
+                reading.spec.key in PERSISTED_VALUE_KEYS
+                and node.values.get(reading.spec.key) != reading.value
+            ):
+                sticky_changed = True
             node.values[reading.spec.key] = reading.value
             if reading.extra:
                 node.extra[reading.spec.key] = reading.extra
@@ -199,7 +210,7 @@ class MocreoBridge:
         for kind, items in new_items.items():
             self._dispatch_new(kind, items)
 
-        if new_items or meta.get("model") or meta.get("units"):
+        if new_items or sticky_changed or meta.get("model") or meta.get("units"):
             self._schedule_save()
 
         async_dispatcher_send(self.hass, SIGNAL_NODE_UPDATED.format(node.key))
@@ -235,7 +246,13 @@ class MocreoBridge:
         from the dashboard after a restart until the next transmission.
         """
         stored = self.entry.data.get(CONF_DISCOVERED) or {}
-        from .parser import KNOWN_FIELDS, derived_specs  # noqa: PLC0415
+        from .parser import (  # noqa: PLC0415
+            DERIVED_SPECS_BY_KEY,
+            KNOWN_FIELDS,
+            PERSISTED_VALUE_KEYS,
+            coerce_value,
+            derived_specs,
+        )
 
         for node_key, info in stored.items():
             if ":" not in node_key:
@@ -244,9 +261,19 @@ class MocreoBridge:
             node = MocreoNode(hub_sn, node_id)
             node.model = info.get("model")
             node.units = dict(info.get("units") or {})
+            node.values = {
+                key: value
+                for key, value in (info.get("values") or {}).items()
+                if key in PERSISTED_VALUE_KEYS
+            }
+            node.restored = True
             self.nodes[node_key] = node
             for field_key, saved in (info.get("fields") or {}).items():
-                spec = KNOWN_FIELDS.get(field_key)
+                # Canonical specs first.  A cache written by an older version
+                # stores only the subset of attributes that version knew about,
+                # so rebuilding a derived spec from it would drop newer
+                # behaviour -- notably `assume_off` on the leak sensor.
+                spec = KNOWN_FIELDS.get(field_key) or DERIVED_SPECS_BY_KEY.get(field_key)
                 if spec is None:
                     spec = FieldSpec(
                         key=field_key,
@@ -259,6 +286,19 @@ class MocreoBridge:
                         truthy=tuple(saved.get("truthy") or ()),
                     )
                 for candidate in (spec, *derived_specs(field_key)):
+                    # A derived value is not stored in its own right when the
+                    # source key is what the hub actually sent, so recompute it
+                    # from the restored raw reading.
+                    if (
+                        candidate.key not in node.values
+                        and field_key in node.values
+                        and candidate.key != field_key
+                    ):
+                        seeded = coerce_value(
+                            candidate, node.values[field_key], "data", self.temp_hundredths
+                        )
+                        if seeded is not None:
+                            node.values[candidate.key] = seeded
                     unique = f"{node_key}:{candidate.key}"
                     if unique in self._known:
                         continue
@@ -303,6 +343,15 @@ class MocreoBridge:
                 "model": node.model,
                 "units": node.units,
                 "fields": fields,
+                # Event-only readings (a leak level) are re-sent only when they
+                # change, so without this the derived leak sensor would have
+                # nothing to show until the next wet/dry cycle.
+                "values": {
+                    key: value
+                    for key, value in node.values.items()
+                    if key in PERSISTED_VALUE_KEYS
+                    and isinstance(value, (str, int, float, bool))
+                },
             }
         if payload == (self.entry.data.get(CONF_DISCOVERED) or {}):
             return
@@ -324,6 +373,7 @@ class MocreoBridge:
                     "model": node.model,
                     "units": node.units,
                     "online": node.online,
+                    "restored": node.restored,
                     "last_seen": node.last_seen,
                     "values": node.values,
                     "last_payloads": node.last_payloads,
