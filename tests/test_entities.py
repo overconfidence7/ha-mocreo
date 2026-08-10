@@ -328,6 +328,35 @@ async def main():
     check("available, not unavailable", ent3.available, True)
     check("flagged as assumed", ent3.extra_state_attributes["assumed_state"], True)
 
+    print("\nthe same cache with the keys in the other order")
+    # Which spec won used to depend on this ordering: `water_leak` is in the
+    # literal field table as well as the derived one, and the literal copy had
+    # no assume_off.  This is the order Nate's live cache actually had.
+    flipped = {"discovered": {KEY: {
+        "model": "LW1",
+        "units": {},
+        "fields": {
+            "water_leak": legacy["discovered"][KEY]["fields"]["water_leak"],
+            "water_level": legacy["discovered"][KEY]["fields"]["water_level"],
+        },
+    }}}
+    _, _, b_flip, added_flip = build(flipped)
+    spec_flip = next(s for _, s in added_flip[KIND_BINARY] if s.key == "water_leak")
+    check("derived spec wins either way", spec_flip.assume_off, True)
+    ent_flip = leak_entity(b_flip, added_flip)
+    await ent_flip.async_added_to_hass()
+    check("still assumed dry", ent_flip.is_on, False)
+    check("still available", ent_flip.available, True)
+    check("only one leak entity", len(added_flip[KIND_BINARY]), 1)
+
+    print("\na literal water_leak payload key assumes dry too")
+    _, _, b7, added7 = build()
+    b7._handle_message(
+        Msg(f"mocreo/{HUB}/node/{LW1}/data", json.dumps([{"model": "SW2", "water_leak": True}]))
+    )
+    spec7 = next(s for _, s in added7[KIND_BINARY] if s.key == "water_leak")
+    check("literal moisture spec assumes off", spec7.assume_off, True)
+
     print("\nand recovers from a state that was itself restored as unavailable")
     ent4 = leak_entity(b3, added3, last_state="unavailable")
     await ent4.async_added_to_hass()
