@@ -316,6 +316,9 @@ async def main():
     check("ls2 fields saved", sorted(saved[f"{HUB}:{LS2}"]["fields"]),
           ["battery", "found", "probe", "rule_alarm", "signal", "temperature"])
     check("model saved", saved[f"{HUB}:{LW1}"]["model"], "LW1")
+    check("last leak level saved", saved[f"{HUB}:{LW1}"]["values"]["water_level"], 0)
+    check("derived leak state saved", saved[f"{HUB}:{LW1}"]["values"]["water_leak"], False)
+    check("ordinary readings not saved", "temperature" in saved[f"{HUB}:{LS2}"]["values"], False)
     check("json round-trips", json.loads(json.dumps(saved)) == saved, True)
 
     await bridge.async_stop()
@@ -340,6 +343,11 @@ async def main():
           next(s for _, s in added2[KIND_SENSOR] if s.key == "temperature").device_class, "temperature")
     check("restored leak keeps device class",
           next(s for _, s in added2[KIND_BINARY] if s.key == "water_leak").device_class, "moisture")
+    check("restored leak assumes dry when unseen",
+          next(s for _, s in added2[KIND_BINARY] if s.key == "water_leak").assume_off, True)
+    check("restored level value", bridge2.nodes[f"{HUB}:{LW1}"].values["water_level"], 0)
+    check("restored derived leak value", bridge2.nodes[f"{HUB}:{LW1}"].values["water_leak"], False)
+    check("restored nodes flagged as such", bridge2.nodes[f"{HUB}:{LW1}"].restored, True)
 
     await bridge2.async_start()
     check("re-asks config for restored nodes",
@@ -394,6 +402,26 @@ async def main():
           len(added_up[KIND_BINARY]), 1)
     check("seeded entity receives the value",
           b_up.nodes[f"{HUB}:{LW1}"].values["water_leak"], True)
+
+    print("\na cache holding a level but no derived value seeds one on restore")
+    cached = ConfigEntry(data={"discovered": {
+        f"{HUB}:{LW1}": {
+            "model": "LW1",
+            "units": {},
+            "fields": {
+                "water_level": {"kind": KIND_SENSOR, "name": "Water level",
+                                "device_class": None, "unit": None,
+                                "state_class": None, "diagnostic": False, "truthy": []},
+            },
+            "values": {"water_level": 2},
+        }
+    }})
+    _, _, b_seed, added_seed = make_bridge(cached)
+    b_seed.async_prepare()
+    wire(b_seed, added_seed)
+    check("raw level restored", b_seed.nodes[f"{HUB}:{LW1}"].values["water_level"], 2)
+    check("derived leak computed from it",
+          b_seed.nodes[f"{HUB}:{LW1}"].values["water_leak"], True)
 
     print("\ncustom prefix is honoured")
     hass3 = HomeAssistant()
