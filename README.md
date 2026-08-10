@@ -125,6 +125,15 @@ MIT.
 
 ## Changelog
 
+### 1.0.6
+
+- **Fixed:** 1.0.5's assumed-dry behaviour did not reach every install. `water_leak`
+  exists both as a literal payload key and as the derived entity, and which
+  definition won depended on the order the keys happened to sit in the cached
+  entity list — so on some installs the leak sensor stayed `unavailable` after
+  the upgrade. Derived definitions now always win, and every moisture spec
+  assumes dry when it has never been seen.
+
 ### 1.0.5
 
 - **Fixed:** the derived **Water leak** binary sensor could sit `unavailable`
