@@ -96,6 +96,16 @@ discovered in the config entry and restores their last values on restart.
 Entities come back immediately instead of disappearing until the next
 transmission.
 
+The leak level needs more than that. An LW1 sends `water_level` only when it
+*changes* — its scheduled reports carry temperature and battery and nothing
+else — so after a restart there may be no leak reading for days. The last known
+level is therefore cached in the config entry alongside the entity list, and the
+derived **Water leak** sensor reports `off` when no level has ever been seen
+rather than going unavailable. It sets an `assumed_state: true` attribute while
+it is doing so, which distinguishes "assumed dry" from "reported dry" without
+changing the state your automations trigger on. A node the hub reports as
+offline is still shown unavailable — that case is real and worth seeing.
+
 ## Reporting a sensor that looks wrong
 
 Open the device page → three-dot menu → **Download diagnostics**. The file
@@ -104,9 +114,28 @@ needs to add a proper mapping for a new model.
 
 ## Testing
 
-`python3 tests/test_parser.py` runs the payload-parsing test suite standalone —
-no Home Assistant install required.
+`python3 tests/test_parser.py`, `tests/test_bridge.py` and
+`tests/test_entities.py` run standalone — no Home Assistant install required.
+They cover payload parsing, the MQTT bridge, and the entity layer against a
+stubbed Home Assistant.
 
 ## License
 
 MIT.
+
+## Changelog
+
+### 1.0.5
+
+- **Fixed:** the derived **Water leak** binary sensor could sit `unavailable`
+  indefinitely. An LW1's scheduled reports omit `water_level` entirely, so after
+  a restart the sensor had no value — and because the state it restored on the
+  next restart was itself `unavailable`, it never recovered without a real
+  wet/dry cycle. It now reports `off` when nothing has been seen, and carries
+  `assumed_state: true` while it does.
+- The last known water level is persisted in the config entry, so the level, its
+  label, and the derived leak state all survive a restart.
+- Derived entity definitions are now rebuilt from code rather than from the
+  cached copy, so an upgrade picks up fixes without the config entry being
+  rewritten first.
+- Added `tests/test_entities.py` covering the entity layer.
