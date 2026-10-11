@@ -217,6 +217,16 @@ class MocreoBridge:
 
     # -- device registry ---------------------------------------------------
 
+    def _find_device(self, registry: Any, identifier: tuple[str, str]) -> Any:
+        """Look up one of this entry's devices by identifier.
+
+        Home Assistant 2026.8+ scopes identifiers to a config entry and deprecates
+        ``async_get_device`` (removed in 2027.8); older versions only have that.
+        """
+        if hasattr(registry, "async_get_device_by_identifier"):
+            return registry.async_get_device_by_identifier(identifier, self.entry.entry_id)
+        return registry.async_get_device(identifiers={identifier})
+
     @callback
     def hub_device_id(self, hub_sn: str) -> str | None:
         """Return the device-registry id of a hub, registering the hub if needed.
@@ -225,7 +235,7 @@ class MocreoBridge:
         Assistant, which needs the registry id rather than the identifier tuple.
         """
         registry = dr.async_get(self.hass)
-        device = registry.async_get_device(identifiers={hub_device_identifier(hub_sn)})
+        device = self._find_device(registry, hub_device_identifier(hub_sn))
         if device is None:
             device = registry.async_get_or_create(
                 config_entry_id=self.entry.entry_id,
@@ -244,7 +254,7 @@ class MocreoBridge:
         self.hub_device_id(node.hub_sn)
         if not update_model:
             return
-        device = registry.async_get_device(identifiers={(DOMAIN, node.key)})
+        device = self._find_device(registry, (DOMAIN, node.key))
         if device is not None:
             registry.async_update_device(
                 device.id, model=node.model, name=node.name

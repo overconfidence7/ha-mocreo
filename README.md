@@ -132,6 +132,10 @@ MIT.
   removed in Home Assistant 2027.8. Devices now link with `via_device_id` (the
   hub's registry id) on versions that support it, and keep `via_device` on
   older versions. No change to entities or device names.
+- **Fixed:** the same Home Assistant versions also deprecate looking devices up
+  with `async_get_device`, since identifiers are now only unique within a config
+  entry. Lookups now use `async_get_device_by_identifier` scoped to the MOCREO
+  entry when available.
 
 ### 1.0.6
 

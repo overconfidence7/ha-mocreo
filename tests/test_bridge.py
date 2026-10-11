@@ -438,6 +438,30 @@ async def main():
     check("default prefix now ignored", len(b3.nodes), 1)
     await b3.async_stop()
 
+    print("\nDevice lookups are scoped to the config entry on current Home Assistant")
+    calls = []
+
+    class _ScopedRegistry(_DeviceRegistry):
+        def async_get_device_by_identifier(self, identifier, config_entry_id):
+            calls.append((identifier, config_entry_id))
+            return self.devices.get(repr(sorted({identifier})))
+
+        def async_get_device(self, *a, **kw):
+            raise AssertionError("deprecated async_get_device must not be used")
+
+    scoped = _ScopedRegistry()
+    saved_get = dr_mod.async_get
+    dr_mod.async_get = lambda hass: scoped
+    try:
+        _, entry4, b4, _ = make_bridge()
+        first = b4.hub_device_id(HUB)
+        second = b4.hub_device_id(HUB)
+        check("hub registered once and reused", first == second and first is not None, True)
+        check("lookup used the new API", len(calls) >= 2, True)
+        check("lookup scoped to this entry", all(c[1] == entry4.entry_id for c in calls), True)
+    finally:
+        dr_mod.async_get = saved_get
+
     print(f"\n{PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0
 
