@@ -218,17 +218,30 @@ class MocreoBridge:
     # -- device registry ---------------------------------------------------
 
     @callback
+    def hub_device_id(self, hub_sn: str) -> str | None:
+        """Return the device-registry id of a hub, registering the hub if needed.
+
+        Node devices point at their hub with ``via_device_id`` on current Home
+        Assistant, which needs the registry id rather than the identifier tuple.
+        """
+        registry = dr.async_get(self.hass)
+        device = registry.async_get_device(identifiers={hub_device_identifier(hub_sn)})
+        if device is None:
+            device = registry.async_get_or_create(
+                config_entry_id=self.entry.entry_id,
+                identifiers={hub_device_identifier(hub_sn)},
+                manufacturer=MANUFACTURER,
+                name=f"MOCREO Hub {hub_sn}",
+                model="Smart Hub",
+                serial_number=hub_sn,
+            )
+        return getattr(device, "id", None)
+
+    @callback
     def _ensure_devices(self, node: MocreoNode, update_model: bool = False) -> None:
         """Make sure the hub device exists so nodes can hang off it."""
         registry = dr.async_get(self.hass)
-        registry.async_get_or_create(
-            config_entry_id=self.entry.entry_id,
-            identifiers={(DOMAIN, node.hub_sn)},
-            manufacturer=MANUFACTURER,
-            name=f"MOCREO Hub {node.hub_sn}",
-            model="Smart Hub",
-            serial_number=node.hub_sn,
-        )
+        self.hub_device_id(node.hub_sn)
         if not update_model:
             return
         device = registry.async_get_device(identifiers={(DOMAIN, node.key)})

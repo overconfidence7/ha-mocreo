@@ -23,6 +23,9 @@ from .parser import (
 # available even when the node is reported offline.
 LINK_FIELDS = frozenset({"found", "signal", "rssi", "battery"})
 
+# True on Home Assistant versions whose DeviceInfo accepts `via_device_id`.
+SUPPORTS_VIA_DEVICE_ID = "via_device_id" in getattr(DeviceInfo, "__annotations__", {})
+
 
 class MocreoEntity(Entity):
     """Base class wiring one field of one node to Home Assistant."""
@@ -43,14 +46,23 @@ class MocreoEntity(Entity):
             self._attr_entity_category = EntityCategory.DIAGNOSTIC
         if spec.icon:
             self._attr_icon = spec.icon
-        self._attr_device_info = DeviceInfo(
+        device_info = DeviceInfo(
             identifiers={(DOMAIN, node_key)},
             manufacturer=MANUFACTURER,
             model=self.node.model if self.node else None,
             name=self.node.name if self.node else f"MOCREO {node_id[-6:]}",
-            via_device=(DOMAIN, hub_sn),
             serial_number=node_id,
         )
+        # Link the node to its hub. Home Assistant 2026.8+ takes the hub's
+        # registry id (`via_device_id`); the identifier tuple (`via_device`) is
+        # deprecated there and removed in 2027.8, but is all older versions know.
+        if SUPPORTS_VIA_DEVICE_ID:
+            hub_id = bridge.hub_device_id(hub_sn)
+            if hub_id:
+                device_info["via_device_id"] = hub_id
+        else:
+            device_info["via_device"] = (DOMAIN, hub_sn)
+        self._attr_device_info = device_info
 
     @property
     def node(self) -> MocreoNode | None:

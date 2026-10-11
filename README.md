@@ -125,6 +125,14 @@ MIT.
 
 ## Changelog
 
+### 1.0.7
+
+- **Fixed:** Home Assistant 2026.8+ logs a deprecation warning because sensor
+  devices pointed at their hub with the old `via_device` identifier, which is
+  removed in Home Assistant 2027.8. Devices now link with `via_device_id` (the
+  hub's registry id) on versions that support it, and keep `via_device` on
+  older versions. No change to entities or device names.
+
 ### 1.0.6
 
 - **Fixed:** 1.0.5's assumed-dry behaviour did not reach every install. `water_leak`

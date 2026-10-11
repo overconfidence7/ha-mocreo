@@ -389,6 +389,22 @@ async def main():
     b6.nodes[KEY].values.pop("probe")
     check("probe with no value is unknown", probe.is_on, None)
 
+    print("\nnode devices link to the hub the way the running HA version expects")
+    import mocreo.entity as entity_mod_under_test  # noqa: PLC0415
+
+    saved_flag = entity_mod_under_test.SUPPORTS_VIA_DEVICE_ID
+    try:
+        entity_mod_under_test.SUPPORTS_VIA_DEVICE_ID = False
+        old = MocreoBinarySensor(b6, probe_key, probe_spec)
+        check("older HA: via_device tuple", old._attr_device_info.get("via_device"), ("mocreo", HUB))
+        check("older HA: no via_device_id", "via_device_id" in old._attr_device_info, False)
+        entity_mod_under_test.SUPPORTS_VIA_DEVICE_ID = True
+        new = MocreoBinarySensor(b6, probe_key, probe_spec)
+        check("current HA: via_device_id is the hub's registry id", new._attr_device_info.get("via_device_id"), "dev")
+        check("current HA: no deprecated via_device", "via_device" in new._attr_device_info, False)
+    finally:
+        entity_mod_under_test.SUPPORTS_VIA_DEVICE_ID = saved_flag
+
     print(f"\n{PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0
 
